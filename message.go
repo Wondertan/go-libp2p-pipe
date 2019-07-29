@@ -59,8 +59,8 @@ func (r *Message) Data() []byte {
 	return r.pb.Body
 }
 
-// GetResponse waits for response, if the message is a sent request
-func (r *Message) GetResponse(ctx context.Context) ([]byte, error) {
+// Response waits for response, if the message is a sent request
+func (r *Message) Response(ctx context.Context) ([]byte, error) {
 	if r.resp == nil {
 		return nil, errors.New("the message is not a request")
 	}
@@ -73,8 +73,8 @@ func (r *Message) GetResponse(ctx context.Context) ([]byte, error) {
 	}
 }
 
-// SendResponse sends response, if the message is a received request
-func (r *Message) SendResponse(msg []byte) {
+// Reply sends response, if the message is a received request
+func (r *Message) Reply(msg []byte) {
 	if r.resp == nil {
 		return
 	}

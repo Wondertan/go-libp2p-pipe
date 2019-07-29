@@ -32,7 +32,7 @@ func TestPipeRequest(t *testing.T) {
 			t.Fatal("something wrong")
 		}
 
-		msg.SendResponse(data)
+		msg.Reply(data)
 	}, test)
 
 	p, err := NewPipe(ctx, h2, h1.ID(), test)
@@ -45,7 +45,7 @@ func TestPipeRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := msg.GetResponse(ctx)
+	resp, err := msg.Response(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestMultipleAsyncResponses(t *testing.T) {
 
 				go func(msg *Message) {
 					<-time.After(time.Millisecond * time.Duration(r.Intn(2000)))
-					msg.SendResponse(msg.Data())
+					msg.Reply(msg.Data())
 				}(req)
 			}
 		}()
@@ -129,7 +129,7 @@ func TestMultipleAsyncResponses(t *testing.T) {
 			go func(msg *Message) {
 				defer wg.Done()
 
-				resp, err := msg.GetResponse(ctx)
+				resp, err := msg.Response(ctx)
 				if err != nil {
 					t.Fatal(err)
 				}
