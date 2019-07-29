@@ -22,7 +22,7 @@ type pipe struct {
 
 	peer   peer.ID
 	s      network.Stream
-	rtries int
+	wtries int
 
 	counter uint64
 	msg     map[uint64]chan *Message
@@ -182,15 +182,14 @@ func (p *pipe) handleRead() {
 func (p *pipe) handleWrite(msg *Message) {
 	for {
 		err := writeMessage(p.s, msg)
-		if err != nil {
-			if p.rtries == MaxWriteAttempts {
-				// TODO Restream and return err if fail
-				return
-			}
-
-			p.rtries++
-			log.Errorf("error writing to stream: %s", err)
+		if err == nil || p.wtries == MaxWriteAttempts {
+			p.wtries = 0
+			return
 		}
+
+		p.wtries++
+		log.Errorf("error writing to stream: %s", err)
+		return
 	}
 }
 

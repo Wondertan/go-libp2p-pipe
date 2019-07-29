@@ -3,7 +3,6 @@ package pipe
 import (
 	"bytes"
 	"context"
-	crand "crypto/rand"
 	"math/rand"
 	"sync"
 	"testing"
@@ -14,7 +13,9 @@ import (
 	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
 )
 
-func TestPipeSendRequest(t *testing.T) {
+var r = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+func TestPipeRequest(t *testing.T) {
 	test := protocol.ID("test")
 	ctx := context.Background()
 	h1, h2 := buildHosts()
@@ -54,13 +55,13 @@ func TestPipeSendRequest(t *testing.T) {
 	}
 }
 
-func TestPipeSendMessage(t *testing.T) {
+func TestPipeMessage(t *testing.T) {
 	test := protocol.ID("test")
 	ctx := context.Background()
 	h1, h2 := buildHosts()
 
 	b := make([]byte, 20)
-	crand.Read(b)
+	r.Read(b)
 
 	SetPipeHandler(h1, func(p Pipe) {
 		msg := NewMessage(b)
@@ -106,7 +107,7 @@ func TestMultipleAsyncResponses(t *testing.T) {
 				}
 
 				go func(msg *Message) {
-					<-time.After(time.Second * time.Duration(rand.Intn(10)))
+					<-time.After(time.Millisecond * time.Duration(r.Intn(2000)))
 					msg.SendResponse(msg.Data())
 				}(req)
 			}
@@ -154,7 +155,7 @@ func TestMultipleAsyncResponses(t *testing.T) {
 
 func newRequest() *Message {
 	b := make([]byte, 20)
-	crand.Read(b)
+	r.Read(b)
 	return NewRequest(b)
 }
 
