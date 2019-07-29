@@ -55,6 +55,11 @@ func SetPipeHandler(host core.Host, h Handler, proto core.ProtocolID) {
 	})
 }
 
+// RemovePipeHandler removes pipe handler from host
+func RemovePipeHandler(host core.Host, proto core.ProtocolID) {
+	host.RemoveStreamHandler(wrapProto(proto))
+}
+
 func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
 	ctx, cancel := context.WithCancel(ctx)
 
