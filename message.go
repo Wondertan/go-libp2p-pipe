@@ -17,6 +17,7 @@ const (
 	response = pb.Message_RESP
 )
 
+// NewRequest creates new pipe Message. After sending it waits for response from remote end of pipe
 func NewRequest(msg []byte) *Message {
 	return &Message{
 		pb: pb.Message{
@@ -27,6 +28,7 @@ func NewRequest(msg []byte) *Message {
 	}
 }
 
+// NewMessage creates new simple pipe Message.
 func NewMessage(msg []byte) *Message {
 	return &Message{
 		pb: pb.Message{
@@ -52,13 +54,15 @@ type Message struct {
 	resp chan *Message
 }
 
+// Data returns bytes which were transported through message
 func (r *Message) Data() []byte {
 	return r.pb.Body
 }
 
+// GetResponse waits for response, if the message is a sent request
 func (r *Message) GetResponse(ctx context.Context) ([]byte, error) {
 	if r.resp == nil {
-		return nil, errors.New("the message has no response")
+		return nil, errors.New("the message is not a request")
 	}
 
 	select {
@@ -69,6 +73,7 @@ func (r *Message) GetResponse(ctx context.Context) ([]byte, error) {
 	}
 }
 
+// SendResponse sends response, if the message is a received request
 func (r *Message) SendResponse(msg []byte) {
 	if r.resp == nil {
 		return

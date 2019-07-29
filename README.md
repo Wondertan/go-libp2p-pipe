@@ -1,4 +1,4 @@
-#go-libp2p-pipe
+# go-libp2p-pipe
 
 Pipe is an effective way to reuse libp2p streams. While streams are 
 lightweight there are still cases of protocols which needs a lot of messaging

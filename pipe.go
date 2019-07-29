@@ -48,6 +48,7 @@ func NewPipe(ctx context.Context, host core.Host, peer peer.ID, proto core.Proto
 	return newPipe(ctx, s, host), nil
 }
 
+// SetPipeHandler sets new stream handler which wraps stream into the pipe
 func SetPipeHandler(host core.Host, h Handler, proto core.ProtocolID) {
 	host.SetStreamHandler(wrapProto(proto), func(stream network.Stream) {
 		h(newPipe(context.TODO(), stream, host))
@@ -76,6 +77,7 @@ func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
 	return p
 }
 
+// Send puts message in the pipe which after are transported to other pipe's end
 func (p *pipe) Send(msg *Message) error {
 	if p.isClosed() {
 		return errors.New("can't send through closed pipe")
@@ -86,6 +88,7 @@ func (p *pipe) Send(msg *Message) error {
 	return nil
 }
 
+// Next iteratively reads new messages from pipe
 func (p *pipe) Next(ctx context.Context) (*Message, error) {
 	if p.isClosed() {
 		return nil, errors.New("can't read from closed pipe")
