@@ -15,8 +15,6 @@ import (
 
 var log = logging.Logger("pipe")
 
-var MaxWriteAttempts = 3
-
 type pipe struct {
 	host host.Host
 
@@ -68,10 +66,10 @@ func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
 		peer:     s.Conn().RemotePeer(),
 		s:        s,
 		msg:      make(map[uint64]chan *Message),
-		ingoing:  make(chan *Message, 8),
+		ingoing:  make(chan *Message, MessageBuffer),
 		outgoing: make(chan *Message, 8),
-		read:     make(chan *Message, 8),
-		resps:    make(chan *Message, 8),
+		read:     make(chan *Message),
+		resps:    make(chan *Message),
 		ctx:      ctx,
 		cancel:   cancel,
 	}

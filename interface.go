@@ -10,6 +10,15 @@ import (
 
 var Protocol protocol.ID = "/pipe/1.0.0"
 
+var (
+	// MaxWriteAttempts specifies amount of retries to write on failure
+	MaxWriteAttempts = 3
+
+	// MessageBuffer specifies the size of buffer for incoming messages
+	// If buffer is full, new messages will be dropped
+	MessageBuffer = 8
+)
+
 type Pipe interface {
 	io.Closer
 
