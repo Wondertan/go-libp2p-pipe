@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package pb;
+
+message Message {
+    enum Tag {
+        MSG = 0;
+        REQ = 1;
+        RESP = 2;
+    }
+
+    // Message identifier
+    uint64 id = 1;
+
+    // Message tag(type)
+    Tag tag = 2;
+
+    // Message body
+    bytes body = 3;
+}
