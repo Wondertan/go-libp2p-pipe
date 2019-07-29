@@ -77,7 +77,6 @@ func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
 	return p
 }
 
-// Send puts message in the pipe which after are transported to other pipe's end
 func (p *pipe) Send(msg *Message) error {
 	if p.isClosed() {
 		return errors.New("can't send through closed pipe")
@@ -88,7 +87,6 @@ func (p *pipe) Send(msg *Message) error {
 	return nil
 }
 
-// Next iteratively reads new messages from pipe
 func (p *pipe) Next(ctx context.Context) (*Message, error) {
 	if p.isClosed() {
 		return nil, errors.New("can't read from closed pipe")
@@ -102,6 +100,14 @@ func (p *pipe) Next(ctx context.Context) (*Message, error) {
 	case <-p.ctx.Done():
 		return nil, p.ctx.Err()
 	}
+}
+
+func (p *pipe) Protocol() protocol.ID {
+	return p.s.Protocol()
+}
+
+func (p *pipe) Conn() network.Conn {
+	return p.s.Conn()
 }
 
 func (p *pipe) Close() error {
