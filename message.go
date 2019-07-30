@@ -82,54 +82,54 @@ func (r *Message) Reply(msg []byte) {
 	r.resp <- newResponse(r.pb.Id, msg)
 }
 
-func readMessage(r io.Reader) (*Message, error) {
+func readMessage(r io.Reader, msg *Message) error {
 	mr := msgio.NewVarintReader(r)
 	b, err := mr.ReadMsg()
 	if err != nil && err != io.EOF {
-		return nil, err
+		return err
 	}
 
-	msg, err := unmarshalMessage(b)
+	err = unmarshalMessage(msg, b)
 	mr.ReleaseMsg(b)
-	if err != nil {
-		return nil, err
-	}
-
-	return msg, nil
-}
-
-func writeMessage(w io.Writer, msg *Message) error {
-	b, err := marshalMessage(msg)
 	if err != nil {
 		return err
 	}
 
-	_, err = w.Write(b)
+	return nil
+}
+
+func writeMessage(w io.Writer, msg *Message) error {
+	size := msg.pb.Size()
+	buf := pool.Get(size + binary.MaxVarintLen64)
+	defer pool.Put(buf)
+
+	n, err := marshalMessage(msg, buf)
+	if err != nil {
+		return err
+	}
+
+	_, err = w.Write(buf[:n])
 	return err
 }
 
-func unmarshalMessage(msg []byte) (*Message, error) {
-	var pb pb.Message
-	err := pb.Unmarshal(msg)
+func unmarshalMessage(msg *Message, buf []byte) error {
+	err := msg.pb.Unmarshal(buf)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &Message{pb: pb}, nil
+	return nil
 }
 
-func marshalMessage(msg *Message) ([]byte, error) {
+func marshalMessage(msg *Message, buf []byte) (int, error) {
 	size := msg.pb.Size()
-
-	buf := pool.Get(size + binary.MaxVarintLen64)
-	defer pool.Put(buf)
 
 	n := binary.PutUvarint(buf, uint64(size))
 	n2, err := msg.pb.MarshalTo(buf[n:])
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 	n += n2
 
-	return buf[:n], nil
+	return n, nil
 }

@@ -8,17 +8,19 @@ import (
 	"testing"
 	"time"
 
+	bhost "github.com/libp2p/go-libp2p-blankhost"
 	"github.com/libp2p/go-libp2p-core/host"
 	"github.com/libp2p/go-libp2p-core/protocol"
-	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
+	swarmt "github.com/libp2p/go-libp2p-swarm/testing"
 )
 
 var r = rand.New(rand.NewSource(time.Now().UnixNano()))
+var l sync.Mutex
 
 func TestPipeRequest(t *testing.T) {
 	test := protocol.ID("test")
 	ctx := context.Background()
-	h1, h2 := buildHosts()
+	h1, h2 := buildHosts(t)
 	msg := newRequest()
 
 	SetPipeHandler(h1, func(p Pipe) {
@@ -58,7 +60,7 @@ func TestPipeRequest(t *testing.T) {
 func TestPipeMessage(t *testing.T) {
 	test := protocol.ID("test")
 	ctx := context.Background()
-	h1, h2 := buildHosts()
+	h1, h2 := buildHosts(t)
 
 	b := make([]byte, 20)
 	r.Read(b)
@@ -94,12 +96,12 @@ func TestPipeMessage(t *testing.T) {
 
 func TestMultipleAsyncResponses(t *testing.T) {
 	ctx := context.Background()
-	count := 10
+	count := 100
 	test := protocol.ID("test")
-	h1, h2 := buildHosts()
+	h1, h2 := buildHosts(t)
 
 	ph := func(p Pipe) {
-		go func() {
+		go func(p Pipe) {
 			for i := 0; i < count; i++ {
 				req, err := p.Next(ctx)
 				if err != nil {
@@ -107,11 +109,16 @@ func TestMultipleAsyncResponses(t *testing.T) {
 				}
 
 				go func(msg *Message) {
-					<-time.After(time.Millisecond * time.Duration(r.Intn(2000)))
+					l.Lock()
+					rn := r.Intn(200)
+					l.Unlock()
+
+					<-time.After(time.Millisecond * time.Duration(rn))
+
 					msg.Reply(msg.Data())
 				}(req)
 			}
-		}()
+		}(p)
 
 		msgs := make([]*Message, count)
 		for i := 0; i < count; i++ {
@@ -154,12 +161,31 @@ func TestMultipleAsyncResponses(t *testing.T) {
 }
 
 func newRequest() *Message {
-	b := make([]byte, 20)
+	l.Lock()
+	defer l.Unlock()
+
+	b := make([]byte, 100)
 	r.Read(b)
 	return NewRequest(b)
 }
 
-func buildHosts() (host.Host, host.Host) {
-	net, _ := mocknet.FullMeshConnected(context.TODO(), 2)
-	return net.Hosts()[0], net.Hosts()[1]
+func buildHosts(t *testing.T) (host.Host, host.Host) {
+	count := 2
+	hosts := make([]host.Host, count)
+	for i := 0; i < count; i++ {
+		hosts[i] = bhost.NewBlankHost(swarmt.GenSwarm(t, context.TODO()))
+	}
+
+	for _, h1 := range hosts {
+		for _, h2 := range hosts {
+			if h1.ID() != h2.ID() {
+				err := h1.Connect(context.TODO(), h2.Peerstore().PeerInfo(h2.ID()))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+
+	return hosts[0], hosts[1]
 }

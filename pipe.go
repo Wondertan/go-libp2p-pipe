@@ -68,7 +68,7 @@ func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
 		msg:      make(map[uint64]chan *Message),
 		ingoing:  make(chan *Message, MessageBuffer),
 		outgoing: make(chan *Message, 8),
-		read:     make(chan *Message),
+		read:     make(chan *Message, 8),
 		resps:    make(chan *Message),
 		ctx:      ctx,
 		cancel:   cancel,
@@ -171,7 +171,8 @@ func (p *pipe) handleIngoing(msg *Message) {
 
 func (p *pipe) handleRead() {
 	for {
-		msg, err := readMessage(p.s)
+		msg := new(Message)
+		err := readMessage(p.s, msg)
 		if err != nil {
 			p.s.Reset()
 
