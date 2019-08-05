@@ -8,6 +8,7 @@ import (
 	logging "github.com/ipfs/go-log"
 	"github.com/libp2p/go-libp2p-core"
 	"github.com/libp2p/go-libp2p-core/host"
+	"github.com/libp2p/go-libp2p-core/mux"
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/protocol"
@@ -173,7 +174,7 @@ func (p *pipe) handleRead() {
 	for {
 		msg := new(Message)
 		err := readMessage(p.s, msg)
-		if err != nil {
+		if err != nil && err != mux.ErrReset {
 			p.s.Reset()
 
 			// TODO Handle restream
