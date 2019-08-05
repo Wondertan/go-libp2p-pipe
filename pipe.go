@@ -16,6 +16,8 @@ import (
 
 var log = logging.Logger("pipe")
 
+var ErrClosed = errors.New("pipe: can't send through closed pipe")
+
 type pipe struct {
 	host host.Host
 
@@ -83,7 +85,10 @@ func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
 
 func (p *pipe) Send(msg *Message) error {
 	if p.isClosed() {
-		return errors.New("can't send through closed pipe")
+		return ErrClosed
+	}
+	if msg == nil {
+		return errors.New("pipe: empty message")
 	}
 
 	p.outgoing <- msg
@@ -93,7 +98,7 @@ func (p *pipe) Send(msg *Message) error {
 
 func (p *pipe) Next(ctx context.Context) (*Message, error) {
 	if p.isClosed() {
-		return nil, errors.New("can't read from closed pipe")
+		return nil, ErrClosed
 	}
 
 	select {
@@ -126,6 +131,11 @@ func (p *pipe) handlingLoop() {
 		case msg := <-p.outgoing:
 			p.handleOutgoing(msg)
 		case msg := <-p.resps:
+			if msg == nil {
+				log.Info("Attempt to send nil response")
+				continue
+			}
+
 			p.handleWrite(msg)
 		case msg := <-p.read:
 			p.handleIngoing(msg)
@@ -180,6 +190,11 @@ func (p *pipe) handleRead() {
 			// TODO Handle restream
 			log.Errorf("error reading from stream: %s", err)
 			return
+		}
+
+		if msg == nil {
+			log.Info("Empty message from stream")
+			continue
 		}
 
 		select {
