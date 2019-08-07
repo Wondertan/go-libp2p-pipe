@@ -62,13 +62,10 @@ func TestPipeMessage(t *testing.T) {
 	ctx := context.Background()
 	h1, h2 := buildHosts(t)
 
-	b := make([]byte, 20)
-	r.Read(b)
+	msgIn := newMessage()
 
 	SetPipeHandler(h1, func(p Pipe) {
-		msg := NewMessage(b)
-
-		err := p.Send(msg)
+		err := p.Send(msgIn)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -79,18 +76,68 @@ func TestPipeMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg, err := p.Next(ctx)
+	msgOut, err := p.Next(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	data := msg.Data()
-	if !bytes.Equal(data, b) {
+	if !bytes.Equal(msgOut.Data(), msgIn.Data()) {
 		t.Fatal("something wrong")
 	}
+}
 
-	if !bytes.Equal(data, b) {
-		t.Fatal("something wrong")
+func TestPipeClosing(t *testing.T) {
+	test := protocol.ID("test")
+	ctx := context.Background()
+	h1, h2 := buildHosts(t)
+
+	SetPipeHandler(h1, func(p Pipe) {
+		req, err := p.Next(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req.Reply(req.Data())
+		err = p.Send(NewMessage(req.Data()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = p.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}, test)
+
+	p, err := NewPipe(ctx, h2, h1.ID(), test)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := newRequest()
+	err = p.Send(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = p.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = req.Response(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = p.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = p.Send(req)
+	if err != ErrClosed {
+		t.Fatal("is not properly closed")
 	}
 }
 
@@ -130,6 +177,11 @@ func TestMultipleAsyncResponses(t *testing.T) {
 			}
 		}
 
+		err := p.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		wg := new(sync.WaitGroup)
 		wg.Add(count)
 		for i := 0; i < count; i++ {
@@ -158,6 +210,15 @@ func TestMultipleAsyncResponses(t *testing.T) {
 	}
 
 	ph(p)
+}
+
+func newMessage() *Message {
+	l.Lock()
+	defer l.Unlock()
+
+	b := make([]byte, 100)
+	r.Read(b)
+	return NewMessage(b)
 }
 
 func newRequest() *Message {

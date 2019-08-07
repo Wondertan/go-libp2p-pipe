@@ -20,6 +20,7 @@ var (
 )
 
 type Pipe interface {
+	// Closes pipe for writing
 	io.Closer
 
 	// Send puts message in the pipe which after are transported to other pipe's end
@@ -33,6 +34,9 @@ type Pipe interface {
 
 	// Conn returns underlying connection used by pipe
 	Conn() network.Conn
+
+	// Reset closes the pipe for reading and writing on both sides
+	Reset() error
 }
 
 type Handler func(Pipe)

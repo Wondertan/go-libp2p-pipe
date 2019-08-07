@@ -11,4 +11,5 @@ require (
 	github.com/libp2p/go-libp2p-core v0.0.9
 	github.com/libp2p/go-libp2p-swarm v0.1.1
 	github.com/libp2p/go-msgio v0.0.4
+	github.com/libp2p/go-yamux v1.2.3
 )

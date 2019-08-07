@@ -3,6 +3,7 @@ package pipe
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 
 	logging "github.com/ipfs/go-log"
@@ -12,30 +13,33 @@ import (
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/protocol"
+	"github.com/libp2p/go-yamux"
 )
 
 var log = logging.Logger("pipe")
 
-var ErrClosed = errors.New("pipe: can't send through closed pipe")
+var (
+	ErrClosed = errors.New("pipe: closed pipe")
+	ErrReset  = errors.New("pipe: reset pipe")
+)
 
 type pipe struct {
 	host host.Host
 
-	peer   peer.ID
-	s      network.Stream
-	wtries int
+	s     network.Stream
+	tries int
 
 	counter uint64
 	msg     map[uint64]chan *Message
 
 	ingoing  chan *Message
 	outgoing chan *Message
+	read     chan *Message
 
-	read  chan *Message
-	resps chan *Message
-
-	ctx    context.Context
-	cancel context.CancelFunc
+	resetCtx context.Context
+	reset    context.CancelFunc
+	closeCtx context.Context
+	close    context.CancelFunc
 }
 
 // NewPipe creates new pipe over new stream
@@ -62,19 +66,20 @@ func RemovePipeHandler(host core.Host, proto core.ProtocolID) {
 }
 
 func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
-	ctx, cancel := context.WithCancel(ctx)
+	resetCtx, reset := context.WithCancel(ctx)
+	closeCtx, close := context.WithCancel(ctx)
 
 	p := &pipe{
 		host:     host,
-		peer:     s.Conn().RemotePeer(),
 		s:        s,
 		msg:      make(map[uint64]chan *Message),
 		ingoing:  make(chan *Message, MessageBuffer),
 		outgoing: make(chan *Message, 8),
 		read:     make(chan *Message, 8),
-		resps:    make(chan *Message),
-		ctx:      ctx,
-		cancel:   cancel,
+		resetCtx: resetCtx,
+		reset:    reset,
+		closeCtx: closeCtx,
+		close:    close,
 	}
 
 	go p.handlingLoop()
@@ -84,30 +89,33 @@ func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
 }
 
 func (p *pipe) Send(msg *Message) error {
-	if p.isClosed() {
+	if isEmpty(msg) {
+		return errors.New("pipe: can't send empty message")
+	}
+
+	select {
+	case p.outgoing <- msg:
+		return nil
+	case <-p.closeCtx.Done():
 		return ErrClosed
 	}
-	if msg == nil {
-		return errors.New("pipe: empty message")
-	}
-
-	p.outgoing <- msg
-
-	return nil
 }
 
 func (p *pipe) Next(ctx context.Context) (*Message, error) {
-	if p.isClosed() {
-		return nil, ErrClosed
+	// to ensure that ingoing is fully read
+	select {
+	case m := <-p.ingoing:
+		return m, nil
+	default:
 	}
 
 	select {
 	case m := <-p.ingoing:
 		return m, nil
+	case <-p.resetCtx.Done():
+		return nil, ErrReset
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-p.ctx.Done():
-		return nil, p.ctx.Err()
 	}
 }
 
@@ -120,38 +128,65 @@ func (p *pipe) Conn() network.Conn {
 }
 
 func (p *pipe) Close() error {
-	p.cancel()
-	// TODO Handle two side closing
-	return p.s.Reset()
+	if p.isClosed() {
+		return nil
+	}
+
+	p.close()
+	close(p.outgoing)
+	return nil
+}
+
+func (p *pipe) Reset() error {
+	if p.isReset() {
+		return nil
+	}
+
+	p.reset()
+	return nil
 }
 
 func (p *pipe) handlingLoop() {
+	defer func() {
+		p.msg = make(map[uint64]chan *Message)
+		p.s.Reset()
+	}()
+
 	for {
 		select {
-		case msg := <-p.outgoing:
-			p.handleOutgoing(msg)
-		case msg := <-p.resps:
-			if msg == nil {
-				log.Info("Attempt to send nil response")
+		case msg, ok := <-p.outgoing:
+			if !ok {
+				go p.s.Close() // to keep messages and pipe closing in order
+				p.outgoing = nil
+				continue
+			}
+			if isEmpty(msg) {
+				log.Info("Attempt to send empty response")
 				continue
 			}
 
-			p.handleWrite(msg)
+			p.handleOutgoing(msg)
+			continue
 		case msg := <-p.read:
 			p.handleIngoing(msg)
-		case <-p.ctx.Done():
-			p.Close()
+			continue
+		default:
+		}
+
+		// to ensure that all the work is done
+		select {
+		case <-p.resetCtx.Done():
 			return
+		default:
 		}
 	}
 }
 
 func (p *pipe) handleOutgoing(msg *Message) {
-	msg.pb.Id = p.counter
-	p.counter++
-
 	if msg.pb.Tag == request {
+		msg.pb.Id = p.counter
 		p.msg[msg.pb.Id] = msg.resp
+		p.counter++
 	}
 
 	p.handleWrite(msg)
@@ -170,7 +205,7 @@ func (p *pipe) handleIngoing(msg *Message) {
 		log.Info("Received response for unknown request, dropping...")
 		return
 	case request:
-		msg.resp = p.resps
+		msg.resp = p.outgoing
 	}
 
 	select {
@@ -184,43 +219,45 @@ func (p *pipe) handleRead() {
 	for {
 		msg := new(Message)
 		err := readMessage(p.s, msg)
-		if err != nil && err != mux.ErrReset {
-			p.s.Reset()
+		if err != nil {
+			if p.isClosed() {
+				// fully close pipe if we already canceled
+				p.reset()
+			}
 
-			// TODO Handle restream
-			log.Errorf("error reading from stream: %s", err)
+			// not to log obvious errors
+			if err != io.EOF && err != mux.ErrReset && err != yamux.ErrConnectionReset {
+				log.Errorf("error reading from pipe's stream: %s", err)
+			}
+
 			return
-		}
-
-		if msg == nil {
-			log.Info("Empty message from stream")
-			continue
 		}
 
 		select {
 		case p.read <- msg:
-		case <-p.ctx.Done():
+		case <-p.resetCtx.Done():
 			return
 		}
 	}
 }
 
 func (p *pipe) handleWrite(msg *Message) {
-	for {
+	for p.tries = 0; p.tries < MaxWriteAttempts; p.tries++ {
 		err := writeMessage(p.s, msg)
-		if err == nil || p.wtries == MaxWriteAttempts {
-			p.wtries = 0
+		if err == nil {
 			return
 		}
 
-		p.wtries++
-		log.Errorf("error writing to stream: %s", err)
-		return
+		log.Errorf("error writing to pipe's stream: %s", err)
 	}
 }
 
 func (p *pipe) isClosed() bool {
-	return p.ctx.Err() != nil
+	return p.closeCtx.Err() != nil || p.isReset()
+}
+
+func (p *pipe) isReset() bool {
+	return p.resetCtx.Err() != nil
 }
 
 func wrapProto(proto protocol.ID) protocol.ID {
@@ -229,4 +266,8 @@ func wrapProto(proto protocol.ID) protocol.ID {
 	}
 
 	return Protocol + "/" + proto
+}
+
+func isEmpty(msg *Message) bool {
+	return msg == nil || msg.pb.Body == nil
 }

@@ -79,13 +79,14 @@ func (r *Message) Reply(msg []byte) {
 		return
 	}
 
+	// TODO Fix possible panics
 	r.resp <- newResponse(r.pb.Id, msg)
 }
 
 func readMessage(r io.Reader, msg *Message) error {
 	mr := msgio.NewVarintReader(r)
 	b, err := mr.ReadMsg()
-	if err != nil && err != io.EOF {
+	if err != nil {
 		return err
 	}
 
