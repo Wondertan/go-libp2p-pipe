@@ -3,6 +3,7 @@ package pipe
 import (
 	"bytes"
 	"context"
+	"errors"
 	"math/rand"
 	"sync"
 	"testing"
@@ -14,14 +15,16 @@ import (
 	swarmt "github.com/libp2p/go-libp2p-swarm/testing"
 )
 
-var r = rand.New(rand.NewSource(time.Now().UnixNano()))
-var l sync.Mutex
-
-func TestPipeRequest(t *testing.T) {
+func TestPipeRequestResponse(t *testing.T) {
 	test := protocol.ID("test")
 	ctx := context.Background()
-	h1, h2 := buildHosts(t)
 	msg := newRequest()
+	testErr := errors.New("test_error")
+
+	h1, h2, err := buildHosts(2)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	SetPipeHandler(h1, func(p Pipe) {
 		req, err := p.Next(ctx)
@@ -29,12 +32,20 @@ func TestPipeRequest(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		data := req.Data()
-		if !bytes.Equal(data, msg.Data()) {
-			t.Fatal("something wrong")
+		err = req.Reply(Data(req.Data()))
+		if err != nil {
+			t.Fatal(err)
 		}
 
-		msg.Reply(data)
+		req, err = p.Next(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = req.Reply(Error(testErr))
+		if err != nil {
+			t.Fatal(err)
+		}
 	}, test)
 
 	p, err := NewPipe(ctx, h2, h1.ID(), test)
@@ -53,14 +64,28 @@ func TestPipeRequest(t *testing.T) {
 	}
 
 	if !bytes.Equal(resp, msg.Data()) {
-		t.Fatal("something wrong")
+		t.Fatal("data is not equal")
+	}
+
+	err = p.Send(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = msg.Response(ctx)
+	if err.Error() != testErr.Error() {
+		t.Fatal("error is wrong")
 	}
 }
 
 func TestPipeMessage(t *testing.T) {
 	test := protocol.ID("test")
 	ctx := context.Background()
-	h1, h2 := buildHosts(t)
+
+	h1, h2, err := buildHosts(2)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	msgIn := newMessage()
 
@@ -89,7 +114,10 @@ func TestPipeMessage(t *testing.T) {
 func TestPipeClosing(t *testing.T) {
 	test := protocol.ID("test")
 	ctx := context.Background()
-	h1, h2 := buildHosts(t)
+	h1, h2, err := buildHosts(2)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	SetPipeHandler(h1, func(p Pipe) {
 		req, err := p.Next(ctx)
@@ -97,7 +125,11 @@ func TestPipeClosing(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		req.Reply(req.Data())
+		err = req.Reply(Data(req.Data()))
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		err = p.Send(NewMessage(req.Data()))
 		if err != nil {
 			t.Fatal(err)
@@ -141,11 +173,99 @@ func TestPipeClosing(t *testing.T) {
 	}
 }
 
-func TestMultipleAsyncResponses(t *testing.T) {
+func BenchmarkPipeMessage(b *testing.B) {
 	ctx := context.Background()
-	count := 100
 	test := protocol.ID("test")
-	h1, h2 := buildHosts(t)
+	msgIn := newMessage()
+	pch := make(chan Pipe)
+
+	h1, h2, err := buildHosts(2)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	SetPipeHandler(h1, func(p Pipe) {
+		pch <- p
+	}, test)
+
+	p1, err := NewPipe(ctx, h2, h1.ID(), test)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	p2 := <-pch
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for n := 0; n < b.N; n++ {
+		err = p1.Send(msgIn)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		_, err := p2.Next(ctx)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkPipeRequestResponse(b *testing.B) {
+	ctx := context.Background()
+	test := protocol.ID("test")
+	msgIn := newRequest()
+	pch := make(chan Pipe)
+
+	h1, h2, err := buildHosts(2)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	SetPipeHandler(h1, func(p Pipe) {
+		pch <- p
+	}, test)
+
+	p1, err := NewPipe(ctx, h2, h1.ID(), test)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	p2 := <-pch
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for n := 0; n < b.N; n++ {
+		err = p1.Send(msgIn)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		msgOut, err := p2.Next(ctx)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		err = msgOut.Reply(Data(msgOut.Data()))
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		_, err = msgIn.Response(ctx)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// Test which sends multiple requests and responses from both pipe ends with delays
+func TestPipeMultipleRequestResponses(t *testing.T) {
+	ctx := context.Background()
+	count := 50
+	test := protocol.ID("test")
+	h1, h2, err := buildHosts(2)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ph := func(p Pipe) {
 		go func(p Pipe) {
@@ -162,29 +282,24 @@ func TestMultipleAsyncResponses(t *testing.T) {
 
 					<-time.After(time.Millisecond * time.Duration(rn))
 
-					msg.Reply(msg.Data())
+					err := msg.Reply(Data(msg.Data()))
+					if err != nil {
+						t.Fatal(err)
+					}
 				}(req)
 			}
 		}(p)
 
-		msgs := make([]*Message, count)
-		for i := 0; i < count; i++ {
-			msgs[i] = newRequest()
-
-			err := p.Send(msgs[i])
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-
-		err := p.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-
 		wg := new(sync.WaitGroup)
 		wg.Add(count)
 		for i := 0; i < count; i++ {
+			msg := newRequest()
+
+			err := p.Send(msg)
+			if err != nil {
+				t.Fatal(err)
+			}
+
 			go func(msg *Message) {
 				defer wg.Done()
 
@@ -196,7 +311,7 @@ func TestMultipleAsyncResponses(t *testing.T) {
 				if !bytes.Equal(resp, msg.Data()) {
 					t.Fatal("something wrong")
 				}
-			}(msgs[i])
+			}(msg)
 		}
 
 		wg.Wait()
@@ -211,6 +326,9 @@ func TestMultipleAsyncResponses(t *testing.T) {
 
 	ph(p)
 }
+
+var r = rand.New(rand.NewSource(time.Now().UnixNano()))
+var l sync.Mutex
 
 func newMessage() *Message {
 	l.Lock()
@@ -230,11 +348,10 @@ func newRequest() *Message {
 	return NewRequest(b)
 }
 
-func buildHosts(t *testing.T) (host.Host, host.Host) {
-	count := 2
+func buildHosts(count int) (host.Host, host.Host, error) {
 	hosts := make([]host.Host, count)
 	for i := 0; i < count; i++ {
-		hosts[i] = bhost.NewBlankHost(swarmt.GenSwarm(t, context.TODO()))
+		hosts[i] = bhost.NewBlankHost(swarmt.GenSwarm(nil, context.TODO()))
 	}
 
 	for _, h1 := range hosts {
@@ -242,11 +359,11 @@ func buildHosts(t *testing.T) (host.Host, host.Host) {
 			if h1.ID() != h2.ID() {
 				err := h1.Connect(context.TODO(), h2.Peerstore().PeerInfo(h2.ID()))
 				if err != nil {
-					t.Fatal(err)
+					return nil, nil, err
 				}
 			}
 		}
 	}
 
-	return hosts[0], hosts[1]
+	return hosts[0], hosts[1], nil
 }

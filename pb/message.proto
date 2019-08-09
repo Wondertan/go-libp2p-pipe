@@ -17,4 +17,6 @@ message Message {
 
     // Message body
     bytes body = 3;
+
+    string err = 4;
 }

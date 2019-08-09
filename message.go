@@ -2,12 +2,7 @@ package pipe
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
-	"io"
-
-	pool "github.com/libp2p/go-buffer-pool"
-	"github.com/libp2p/go-msgio"
 
 	"github.com/Wondertan/go-libp2p-pipe/pb"
 )
@@ -38,12 +33,11 @@ func NewMessage(msg []byte) *Message {
 	}
 }
 
-func newResponse(id uint64, msg []byte) *Message {
+func newResponse(id uint64) *Message {
 	return &Message{
 		pb: pb.Message{
-			Id:   id,
-			Tag:  pb.Message_RESP,
-			Body: msg,
+			Id:  id,
+			Tag: pb.Message_RESP,
 		},
 	}
 }
@@ -51,7 +45,8 @@ func newResponse(id uint64, msg []byte) *Message {
 type Message struct {
 	pb pb.Message
 
-	resp chan *Message
+	closeCtx context.Context
+	resp     chan *Message
 }
 
 // Data returns bytes which were transported through message
@@ -67,70 +62,52 @@ func (r *Message) Response(ctx context.Context) ([]byte, error) {
 
 	select {
 	case m := <-r.resp:
+		if m.pb.Err != "" {
+			return m.pb.Body, errors.New(m.pb.Err)
+		}
 		return m.pb.Body, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 }
 
+func Data(data []byte) RepOpt {
+	return func(m *Message) {
+		if len(data) == 0 {
+			return
+		}
+		m.pb.Body = data
+	}
+}
+
+func Error(err error) RepOpt {
+	return func(m *Message) {
+		if err == nil {
+			return
+		}
+		m.pb.Err = err.Error()
+	}
+}
+
 // Reply sends response, if the message is a received request
-func (r *Message) Reply(msg []byte) {
+func (r *Message) Reply(resp ...RepOpt) error {
 	if r.resp == nil {
-		return
+		return errors.New("message is not a request")
 	}
 
-	// TODO Fix possible panics
-	r.resp <- newResponse(r.pb.Id, msg)
-}
-
-func readMessage(r io.Reader, msg *Message) error {
-	mr := msgio.NewVarintReader(r)
-	b, err := mr.ReadMsg()
-	if err != nil {
-		return err
+	if len(resp) == 0 {
+		return errors.New("reply should not be empty")
 	}
 
-	err = unmarshalMessage(msg, b)
-	mr.ReleaseMsg(b)
-	if err != nil {
-		return err
+	msg := newResponse(r.pb.Id)
+
+	for _, opt := range resp {
+		opt(msg)
 	}
+
+	r.resp <- msg
 
 	return nil
 }
 
-func writeMessage(w io.Writer, msg *Message) error {
-	size := msg.pb.Size()
-	buf := pool.Get(size + binary.MaxVarintLen64)
-	defer pool.Put(buf)
-
-	n, err := marshalMessage(msg, buf)
-	if err != nil {
-		return err
-	}
-
-	_, err = w.Write(buf[:n])
-	return err
-}
-
-func unmarshalMessage(msg *Message, buf []byte) error {
-	err := msg.pb.Unmarshal(buf)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func marshalMessage(msg *Message, buf []byte) (int, error) {
-	size := msg.pb.Size()
-
-	n := binary.PutUvarint(buf, uint64(size))
-	n2, err := msg.pb.MarshalTo(buf[n:])
-	if err != nil {
-		return 0, err
-	}
-	n += n2
-
-	return n, nil
-}
+type RepOpt func(*Message)

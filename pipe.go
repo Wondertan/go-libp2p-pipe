@@ -9,11 +9,9 @@ import (
 	logging "github.com/ipfs/go-log"
 	"github.com/libp2p/go-libp2p-core"
 	"github.com/libp2p/go-libp2p-core/host"
-	"github.com/libp2p/go-libp2p-core/mux"
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/protocol"
-	"github.com/libp2p/go-yamux"
 )
 
 var log = logging.Logger("pipe")
@@ -156,7 +154,7 @@ func (p *pipe) handlingLoop() {
 		select {
 		case msg, ok := <-p.outgoing:
 			if !ok {
-				go p.s.Close() // to keep messages and pipe closing in order
+				p.s.Close() // closing here to keep message handling and closure in order
 				p.outgoing = nil
 				continue
 			}
@@ -216,17 +214,18 @@ func (p *pipe) handleIngoing(msg *Message) {
 }
 
 func (p *pipe) handleRead() {
+	var err error
 	for {
 		msg := new(Message)
-		err := readMessage(p.s, msg)
+		err = readMessage(p.s, msg)
 		if err != nil {
 			if p.isClosed() {
-				// fully close pipe if we already canceled
+				// fully close pipe if our end is already closed
 				p.reset()
 			}
 
 			// not to log obvious errors
-			if err != io.EOF && err != mux.ErrReset && err != yamux.ErrConnectionReset {
+			if err != io.EOF {
 				log.Errorf("error reading from pipe's stream: %s", err)
 			}
 
@@ -242,8 +241,9 @@ func (p *pipe) handleRead() {
 }
 
 func (p *pipe) handleWrite(msg *Message) {
+	var err error
 	for p.tries = 0; p.tries < MaxWriteAttempts; p.tries++ {
-		err := writeMessage(p.s, msg)
+		err = writeMessage(p.s, msg)
 		if err == nil {
 			return
 		}
@@ -269,5 +269,5 @@ func wrapProto(proto protocol.ID) protocol.ID {
 }
 
 func isEmpty(msg *Message) bool {
-	return msg == nil || msg.pb.Body == nil
+	return msg == nil || !(msg.pb.Body != nil || msg.pb.Err != "")
 }
