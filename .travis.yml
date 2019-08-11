@@ -9,5 +9,12 @@ go:
 script:
   - go test -race 
   
-install:
-  - true
+os:
+  - linux
+  - osx
+
+sudo: false
+
+script:
+  - env GO111MODULE=on go build
+  - env GO111MODULE=on go test
