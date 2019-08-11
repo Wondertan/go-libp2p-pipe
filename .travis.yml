@@ -1,0 +1,13 @@
+os:
+  - linux
+
+language: go
+
+go:
+  - 1.11.x
+  
+script:
+  - go test -race 
+  
+install:
+  - true
