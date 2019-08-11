@@ -2,6 +2,7 @@
 
 [![Documentation](https://godoc.org/github.com/Wondertan/go-libp2p-pipe?status.svg)](https://godoc.org/github.com/Wondertan/go-libp2p-pipe)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Wondertan/go-libp2p-pipe)](https://goreportcard.com/report/github.com/Wondertan/go-libp2p-pipe)
+[![codecov](https://codecov.io/gh/Wondertan/go-libp2p-pipe/branch/master/graph/badge.svg)](https://codecov.io/gh/Wondertan/go-libp2p-pipe)
 [![License](https://img.shields.io/github/license/Wondertan/go-libp2p-pipe.svg?maxAge=2592000)](https://github.com/Wondertan/go-libp2p-pipe/blob/master/LICENSE)
 [![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg?style=flat-square)](https://github.com/RichardLitt/standard-readme)
 
