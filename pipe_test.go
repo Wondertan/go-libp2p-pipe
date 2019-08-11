@@ -260,7 +260,7 @@ func BenchmarkPipeRequestResponse(b *testing.B) {
 // Test which sends multiple requests and responses from both pipe ends with delays
 func TestPipeMultipleRequestResponses(t *testing.T) {
 	ctx := context.Background()
-	count := 50
+	count := 100
 	test := protocol.ID("test")
 	h1, h2, err := buildHosts(2)
 	if err != nil {

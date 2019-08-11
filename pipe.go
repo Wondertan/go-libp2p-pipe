@@ -164,11 +164,9 @@ func (p *pipe) handlingLoop() {
 			}
 
 			p.handleOutgoing(msg)
-			continue
 		case msg := <-p.read:
 			p.handleIngoing(msg)
 			continue
-		default:
 		}
 
 		// to ensure that all the work is done
