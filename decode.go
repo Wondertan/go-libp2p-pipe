@@ -6,14 +6,15 @@ import (
 	"github.com/libp2p/go-msgio"
 )
 
-func readMessage(r io.Reader, msg *Message) error {
+// ReadMessage fills given Message from Reader
+func ReadMessage(r io.Reader, msg *Message) error {
 	mr := msgio.NewVarintReader(r)
 	b, err := mr.ReadMsg()
 	if err != nil {
 		return err
 	}
 
-	err = unmarshalMessage(msg, b)
+	err = UnmarshalMessage(msg, b)
 	mr.ReleaseMsg(b)
 	if err != nil {
 		return err
@@ -22,8 +23,9 @@ func readMessage(r io.Reader, msg *Message) error {
 	return nil
 }
 
-func unmarshalMessage(msg *Message, buf []byte) error {
-	err := msg.pb.Unmarshal(buf)
+// UnmarshalMessage fills given Message from byte slice
+func UnmarshalMessage(msg *Message, b []byte) error {
+	err := msg.pb.Unmarshal(b)
 	if err != nil {
 		return err
 	}

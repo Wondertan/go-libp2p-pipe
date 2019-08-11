@@ -16,15 +16,19 @@ import (
 )
 
 func TestPipeRequestResponse(t *testing.T) {
-	test := protocol.ID("test")
 	ctx := context.Background()
-	msg := newRequest()
+	// ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// defer cancel()
+
+	test := protocol.ID("test")
+	req := newRandRequest()
 	testErr := errors.New("test_error")
 
-	h1, h2, err := buildHosts(2)
+	h, err := buildHosts(ctx, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	h1, h2 := h[0], h[1]
 
 	SetPipeHandler(h1, func(p Pipe) {
 		req, err := p.Next(ctx)
@@ -53,41 +57,43 @@ func TestPipeRequestResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = p.Send(msg)
+	err = p.Send(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	resp, err := msg.Response(ctx)
+	resp, err := req.Response(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !bytes.Equal(resp, msg.Data()) {
-		t.Fatal("data is not equal")
+	if !bytes.Equal(resp, req.Data()) {
+		t.Fatal("req is not equal with resp")
 	}
 
-	err = p.Send(msg)
+	err = p.Send(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = msg.Response(ctx)
+	_, err = req.Response(ctx)
 	if err.Error() != testErr.Error() {
 		t.Fatal("error is wrong")
 	}
 }
 
 func TestPipeMessage(t *testing.T) {
-	test := protocol.ID("test")
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
-	h1, h2, err := buildHosts(2)
+	test := protocol.ID("test")
+	h, err := buildHosts(ctx, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	h1, h2 := h[0], h[1]
 
-	msgIn := newMessage()
+	msgIn := newRandMessage()
 
 	SetPipeHandler(h1, func(p Pipe) {
 		err := p.Send(msgIn)
@@ -107,17 +113,20 @@ func TestPipeMessage(t *testing.T) {
 	}
 
 	if !bytes.Equal(msgOut.Data(), msgIn.Data()) {
-		t.Fatal("something wrong")
+		t.Fatal("messages are not equal")
 	}
 }
 
 func TestPipeClosing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
 	test := protocol.ID("test")
-	ctx := context.Background()
-	h1, h2, err := buildHosts(2)
+	h, err := buildHosts(ctx, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	h1, h2 := h[0], h[1]
 
 	SetPipeHandler(h1, func(p Pipe) {
 		req, err := p.Next(ctx)
@@ -146,7 +155,7 @@ func TestPipeClosing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req := newRequest()
+	req := newRandRequest()
 	err = p.Send(req)
 	if err != nil {
 		t.Fatal(err)
@@ -169,20 +178,23 @@ func TestPipeClosing(t *testing.T) {
 
 	err = p.Send(req)
 	if err != ErrClosed {
-		t.Fatal("is not properly closed")
+		t.Fatal("pipe is not properly closed")
 	}
 }
 
 func BenchmarkPipeMessage(b *testing.B) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	test := protocol.ID("test")
-	msgIn := newMessage()
+	msgIn := newRandMessage()
 	pch := make(chan Pipe)
 
-	h1, h2, err := buildHosts(2)
+	h, err := buildHosts(ctx, 2)
 	if err != nil {
 		b.Fatal(err)
 	}
+	h1, h2 := h[0], h[1]
 
 	SetPipeHandler(h1, func(p Pipe) {
 		pch <- p
@@ -211,15 +223,18 @@ func BenchmarkPipeMessage(b *testing.B) {
 }
 
 func BenchmarkPipeRequestResponse(b *testing.B) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	test := protocol.ID("test")
-	msgIn := newRequest()
+	msgIn := newRandRequest()
 	pch := make(chan Pipe)
 
-	h1, h2, err := buildHosts(2)
+	h, err := buildHosts(ctx, 2)
 	if err != nil {
 		b.Fatal(err)
 	}
+	h1, h2 := h[0], h[1]
 
 	SetPipeHandler(h1, func(p Pipe) {
 		pch <- p
@@ -257,61 +272,72 @@ func BenchmarkPipeRequestResponse(b *testing.B) {
 	}
 }
 
-// Test which sends multiple requests and responses from both pipe ends with delays
 func TestPipeMultipleRequestResponses(t *testing.T) {
-	ctx := context.Background()
-	count := 100
+	messagesCount := 100
+	maxReplyDelay := time.Millisecond * 200
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
 	test := protocol.ID("test")
-	h1, h2, err := buildHosts(2)
+	h, err := buildHosts(ctx, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	h1, h2 := h[0], h[1]
 
 	ph := func(p Pipe) {
 		go func(p Pipe) {
-			for i := 0; i < count; i++ {
+			wg := new(sync.WaitGroup)
+			wg.Add(messagesCount)
+			for i := 0; i < messagesCount; i++ {
 				req, err := p.Next(ctx)
 				if err != nil {
 					t.Fatal(err)
 				}
 
-				go func(msg *Message) {
-					l.Lock()
-					rn := r.Intn(200)
-					l.Unlock()
+				go func(req *Message) {
+					defer wg.Done()
 
-					<-time.After(time.Millisecond * time.Duration(rn))
+					delay(ctx, maxReplyDelay)
 
-					err := msg.Reply(Data(msg.Data()))
+					err := req.Reply(Data(req.Data()))
 					if err != nil {
 						t.Fatal(err)
 					}
 				}(req)
 			}
+
+			wg.Wait()
+
+			err = p.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
 		}(p)
 
 		wg := new(sync.WaitGroup)
-		wg.Add(count)
-		for i := 0; i < count; i++ {
-			msg := newRequest()
+		wg.Add(messagesCount)
+		for i := 0; i < messagesCount; i++ {
+			req := newRandRequest()
 
-			err := p.Send(msg)
+			err := p.Send(req)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			go func(msg *Message) {
+			go func(req *Message) {
 				defer wg.Done()
 
-				resp, err := msg.Response(ctx)
+				resp, err := req.Response(ctx)
 				if err != nil {
 					t.Fatal(err)
 				}
 
-				if !bytes.Equal(resp, msg.Data()) {
-					t.Fatal("something wrong")
+				if !bytes.Equal(resp, req.Data()) {
+					t.Fatal("req is not equal with the resp")
 				}
-			}(msg)
+			}(req)
 		}
 
 		wg.Wait()
@@ -330,7 +356,7 @@ func TestPipeMultipleRequestResponses(t *testing.T) {
 var r = rand.New(rand.NewSource(time.Now().UnixNano()))
 var l sync.Mutex
 
-func newMessage() *Message {
+func newRandMessage() *Message {
 	l.Lock()
 	defer l.Unlock()
 
@@ -339,7 +365,7 @@ func newMessage() *Message {
 	return NewMessage(b)
 }
 
-func newRequest() *Message {
+func newRandRequest() *Message {
 	l.Lock()
 	defer l.Unlock()
 
@@ -348,7 +374,20 @@ func newRequest() *Message {
 	return NewRequest(b)
 }
 
-func buildHosts(count int) (host.Host, host.Host, error) {
+func delay(ctx context.Context, max time.Duration) {
+	l.Lock()
+	rn := r.Intn(int(max))
+	l.Unlock()
+
+	select {
+	case <-time.After(time.Duration(rn)):
+		return
+	case <-ctx.Done():
+		return
+	}
+}
+
+func buildHosts(ctx context.Context, count int) ([]host.Host, error) {
 	hosts := make([]host.Host, count)
 	for i := 0; i < count; i++ {
 		hosts[i] = bhost.NewBlankHost(swarmt.GenSwarm(nil, context.TODO()))
@@ -359,11 +398,11 @@ func buildHosts(count int) (host.Host, host.Host, error) {
 			if h1.ID() != h2.ID() {
 				err := h1.Connect(context.TODO(), h2.Peerstore().PeerInfo(h2.ID()))
 				if err != nil {
-					return nil, nil, err
+					return nil, err
 				}
 			}
 		}
 	}
 
-	return hosts[0], hosts[1], nil
+	return hosts, nil
 }

@@ -2,21 +2,30 @@ syntax = "proto3";
 
 package pb;
 
+// Proto message which is used for communication by Pipe on a wire
 message Message {
+
+    // Tag specifies message form
     enum Tag {
-        MSG = 0;
+        // Simple message form
+        SIM = 0;
+
+        // Request form
         REQ = 1;
+
+        // Response form
         RESP = 2;
     }
 
-    // Message identifier
+    // Unique message identifier
     uint64 id = 1;
 
-    // Message tag(type)
+    // Tag field
     Tag tag = 2;
 
-    // Message body
+    // Message data
     bytes body = 3;
 
+    // Error field for handling errors
     string err = 4;
 }

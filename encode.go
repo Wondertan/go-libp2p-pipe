@@ -7,12 +7,13 @@ import (
 	pool "github.com/libp2p/go-buffer-pool"
 )
 
-func writeMessage(w io.Writer, msg *Message) error {
+// WriteMessage writes given Message to the Writer
+func WriteMessage(w io.Writer, msg *Message) error {
 	size := msg.pb.Size()
 	buf := pool.Get(size + binary.MaxVarintLen64)
 	defer pool.Put(buf)
 
-	n, err := marshalMessage(msg, buf)
+	n, err := MarshalMessage(msg, buf)
 	if err != nil {
 		return err
 	}
@@ -21,7 +22,8 @@ func writeMessage(w io.Writer, msg *Message) error {
 	return err
 }
 
-func marshalMessage(msg *Message, buf []byte) (int, error) {
+// MarshalMessage fills given byte slice with the Message
+func MarshalMessage(msg *Message, buf []byte) (int, error) {
 	size := msg.pb.Size()
 
 	n := binary.PutUvarint(buf, uint64(size))

@@ -93,6 +93,7 @@ func (p *pipe) Send(msg *Message) error {
 
 	select {
 	case p.outgoing <- msg:
+		msg.ctx = p.resetCtx
 		return nil
 	case <-p.closeCtx.Done():
 		return ErrClosed
@@ -152,6 +153,13 @@ func (p *pipe) handlingLoop() {
 
 	for {
 		select {
+		case msg := <-p.read:
+			p.handleIngoing(msg)
+			continue
+		default:
+		}
+
+		select {
 		case msg, ok := <-p.outgoing:
 			if !ok {
 				p.s.Close() // closing here to keep message handling and closure in order
@@ -166,14 +174,8 @@ func (p *pipe) handlingLoop() {
 			p.handleOutgoing(msg)
 		case msg := <-p.read:
 			p.handleIngoing(msg)
-			continue
-		}
-
-		// to ensure that all the work is done
-		select {
 		case <-p.resetCtx.Done():
 			return
-		default:
 		}
 	}
 }
@@ -202,6 +204,7 @@ func (p *pipe) handleIngoing(msg *Message) {
 		return
 	case request:
 		msg.resp = p.outgoing
+		msg.ctx = p.closeCtx
 	}
 
 	select {
@@ -215,7 +218,7 @@ func (p *pipe) handleRead() {
 	var err error
 	for {
 		msg := new(Message)
-		err = readMessage(p.s, msg)
+		err = ReadMessage(p.s, msg)
 		if err != nil {
 			if p.isClosed() {
 				// fully close pipe if our end is already closed
@@ -230,18 +233,14 @@ func (p *pipe) handleRead() {
 			return
 		}
 
-		select {
-		case p.read <- msg:
-		case <-p.resetCtx.Done():
-			return
-		}
+		p.read <- msg
 	}
 }
 
 func (p *pipe) handleWrite(msg *Message) {
 	var err error
 	for p.tries = 0; p.tries < MaxWriteAttempts; p.tries++ {
-		err = writeMessage(p.s, msg)
+		err = WriteMessage(p.s, msg)
 		if err == nil {
 			return
 		}
