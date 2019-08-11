@@ -39,7 +39,7 @@ failures with graceful pipe closing on both sides of the pipe.
 
 ## Install
 
-`go get github.com/Wondertan/go-libp2p-pipe`
+`$ go get github.com/Wondertan/go-libp2p-pipe`
 
 ## Usage 
 
