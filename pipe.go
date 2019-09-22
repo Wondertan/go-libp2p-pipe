@@ -17,8 +17,9 @@ import (
 var log = logging.Logger("pipe")
 
 var (
-	ErrClosed = errors.New("pipe: closed pipe")
-	ErrReset  = errors.New("pipe: reset pipe")
+	ErrClosed = errors.New("pipe: closed")
+	ErrReset  = errors.New("pipe: reset")
+	ErrEmpty  = errors.New("pipe: empty message")
 )
 
 type pipe struct {
@@ -88,7 +89,7 @@ func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
 
 func (p *pipe) Send(msg *Message) error {
 	if isEmpty(msg) {
-		return errors.New("pipe: can't send empty message")
+		return ErrEmpty
 	}
 
 	select {
@@ -128,7 +129,7 @@ func (p *pipe) Conn() network.Conn {
 
 func (p *pipe) Close() error {
 	if p.isClosed() {
-		return nil
+		return ErrClosed
 	}
 
 	p.close()
@@ -138,7 +139,7 @@ func (p *pipe) Close() error {
 
 func (p *pipe) Reset() error {
 	if p.isReset() {
-		return nil
+		return ErrReset
 	}
 
 	p.reset()
@@ -164,10 +165,6 @@ func (p *pipe) handlingLoop() {
 			if !ok {
 				p.s.Close() // closing here to keep message handling and closure in order
 				p.outgoing = nil
-				continue
-			}
-			if isEmpty(msg) {
-				log.Info("Attempt to send empty response")
 				continue
 			}
 
@@ -263,8 +260,4 @@ func wrapProto(proto protocol.ID) protocol.ID {
 	}
 
 	return Protocol + "/" + proto
-}
-
-func isEmpty(msg *Message) bool {
-	return msg == nil || !(msg.pb.Body != nil || msg.pb.Err != "")
 }

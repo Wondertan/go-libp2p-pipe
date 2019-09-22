@@ -112,12 +112,8 @@ func Error(err error) RepOpt {
 // Reply sends response, if the message is a received request
 // Reply accepts different options as responses, which could be concatenated together
 func (r *Message) Reply(resp ...RepOpt) error {
-	if r.resp == nil {
-		return errors.New("message is not a request")
-	}
-
-	if len(resp) == 0 {
-		return errors.New("reply should not be empty")
+	if r.resp == nil || len(resp) == 0 {
+		return ErrEmpty
 	}
 
 	// make response with the same id
@@ -126,6 +122,10 @@ func (r *Message) Reply(resp ...RepOpt) error {
 
 	for _, opt := range resp {
 		opt(msg)
+	}
+
+	if isEmpty(msg) {
+		return ErrEmpty
 	}
 
 	select {
@@ -138,3 +138,7 @@ func (r *Message) Reply(resp ...RepOpt) error {
 
 // RepOpt is a type of option functions for Reply method
 type RepOpt func(*Message)
+
+func isEmpty(msg *Message) bool {
+	return msg == nil || !(msg.pb.Body != nil || msg.pb.Err != "")
+}
