@@ -5,14 +5,16 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
-	bhost "github.com/libp2p/go-libp2p-blankhost"
+	logging "github.com/ipfs/go-log"
+	lwriter "github.com/ipfs/go-log/writer"
 	"github.com/libp2p/go-libp2p-core/host"
 	"github.com/libp2p/go-libp2p-core/protocol"
-	swarmt "github.com/libp2p/go-libp2p-swarm/testing"
+	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
 )
 
 func TestPipeRequestResponse(t *testing.T) {
@@ -36,7 +38,7 @@ func TestPipeRequestResponse(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = req.Reply(Data(req.Data()))
+		err = req.Reply(ctx, Data(req.Data()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,7 +48,7 @@ func TestPipeRequestResponse(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = req.Reply(Error(testErr))
+		err = req.Reply(ctx, Error(testErr))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -57,7 +59,7 @@ func TestPipeRequestResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = p.Send(req)
+	err = p.Send(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +73,7 @@ func TestPipeRequestResponse(t *testing.T) {
 		t.Fatal("req is not equal with resp")
 	}
 
-	err = p.Send(req)
+	err = p.Send(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +98,7 @@ func TestPipeMessage(t *testing.T) {
 	msgIn := newRandMessage()
 
 	SetPipeHandler(h1, func(p Pipe) {
-		err := p.Send(msgIn)
+		err := p.Send(ctx, msgIn)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -134,12 +136,12 @@ func TestPipeClosing(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = req.Reply(Data(req.Data()))
+		err = req.Reply(ctx, Data(req.Data()))
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		err = p.Send(NewMessage(req.Data()))
+		err = p.Send(ctx, NewMessage(req.Data()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -156,7 +158,7 @@ func TestPipeClosing(t *testing.T) {
 	}
 
 	req := newRandRequest()
-	err = p.Send(req)
+	err = p.Send(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +178,7 @@ func TestPipeClosing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = p.Send(req)
+	err = p.Send(ctx, req)
 	if err != ErrClosed {
 		t.Fatal("pipe is not properly closed")
 	}
@@ -210,7 +212,7 @@ func BenchmarkPipeMessage(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for n := 0; n < b.N; n++ {
-		err = p1.Send(msgIn)
+		err = p1.Send(ctx, msgIn)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -250,7 +252,7 @@ func BenchmarkPipeRequestResponse(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for n := 0; n < b.N; n++ {
-		err = p1.Send(msgIn)
+		err = p1.Send(ctx, msgIn)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -260,7 +262,7 @@ func BenchmarkPipeRequestResponse(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		err = msgOut.Reply(Data(msgOut.Data()))
+		err = msgOut.Reply(ctx, Data(msgOut.Data()))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -273,20 +275,27 @@ func BenchmarkPipeRequestResponse(b *testing.B) {
 }
 
 func TestPipeMultipleRequestResponses(t *testing.T) {
-	messagesCount := 100
+	logging.SetLogLevel("pipe", "debug")
+	lwriter.WriterGroup.AddWriter(os.Stderr)
+
+	messagesCount := 50
 	maxReplyDelay := time.Millisecond * 200
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
 	test := protocol.ID("test")
+	ctx := context.Background()
+
 	h, err := buildHosts(ctx, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	h1, h2 := h[0], h[1]
 
+	var count int32
 	ph := func(p Pipe) {
+		ctx := log.Start(ctx, "PipeMultiple")
+		defer log.Finish(ctx)
+		log.SetTag(ctx, "pipe", count)
+
 		go func(p Pipe) {
 			wg := new(sync.WaitGroup)
 			wg.Add(messagesCount)
@@ -301,7 +310,7 @@ func TestPipeMultipleRequestResponses(t *testing.T) {
 
 					delay(ctx, maxReplyDelay)
 
-					err := req.Reply(Data(req.Data()))
+					err := req.Reply(ctx, Data(req.Data()))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -321,7 +330,7 @@ func TestPipeMultipleRequestResponses(t *testing.T) {
 		for i := 0; i < messagesCount; i++ {
 			req := newRandRequest()
 
-			err := p.Send(req)
+			err := p.Send(ctx, req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -388,21 +397,6 @@ func delay(ctx context.Context, max time.Duration) {
 }
 
 func buildHosts(ctx context.Context, count int) ([]host.Host, error) {
-	hosts := make([]host.Host, count)
-	for i := 0; i < count; i++ {
-		hosts[i] = bhost.NewBlankHost(swarmt.GenSwarm(nil, context.TODO()))
-	}
-
-	for _, h1 := range hosts {
-		for _, h2 := range hosts {
-			if h1.ID() != h2.ID() {
-				err := h1.Connect(context.TODO(), h2.Peerstore().PeerInfo(h2.ID()))
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-	}
-
-	return hosts, nil
+	net, _ := mocknet.FullMeshConnected(ctx, count)
+	return net.Hosts(), nil
 }

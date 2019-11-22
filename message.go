@@ -55,7 +55,7 @@ func newResponse(id uint64) *Message {
 type Message struct {
 	pb pb.Message
 
-	ctx  context.Context
+	p    *pipe
 	resp chan *Message
 }
 
@@ -111,8 +111,8 @@ func Error(err error) RepOpt {
 
 // Reply sends response, if the message is a received request
 // Reply accepts different options as responses, which could be concatenated together
-func (r *Message) Reply(resp ...RepOpt) error {
-	if r.resp == nil || len(resp) == 0 {
+func (r *Message) Reply(ctx context.Context, resp ...RepOpt) error {
+	if len(resp) == 0 {
 		return ErrEmpty
 	}
 
@@ -124,16 +124,7 @@ func (r *Message) Reply(resp ...RepOpt) error {
 		opt(msg)
 	}
 
-	if isEmpty(msg) {
-		return ErrEmpty
-	}
-
-	select {
-	case r.resp <- msg:
-		return nil
-	case <-r.ctx.Done():
-		return ErrClosed
-	}
+	return r.p.Send(ctx, msg)
 }
 
 // RepOpt is a type of option functions for Reply method

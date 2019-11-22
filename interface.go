@@ -39,7 +39,7 @@ type Pipe interface {
 	io.Closer
 
 	// Send puts message in the pipe which after are transported to other pipe's end
-	Send(*Message) error
+	Send(context.Context, *Message) error
 
 	// Next iteratively reads new messages from pipe
 	Next(context.Context) (*Message, error)

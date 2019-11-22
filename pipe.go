@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 
 	logging "github.com/ipfs/go-log"
 	"github.com/libp2p/go-libp2p-core"
@@ -31,14 +32,15 @@ type pipe struct {
 	counter uint64
 	msg     map[uint64]chan *Message
 
-	ingoing  chan *Message
-	outgoing chan *Message
-	read     chan *Message
+	ingoing chan *Message
+	read    chan *Message
 
 	resetCtx context.Context
 	reset    context.CancelFunc
 	closeCtx context.Context
 	close    context.CancelFunc
+
+	l sync.Mutex
 }
 
 // NewPipe creates new pipe over new stream
@@ -73,7 +75,6 @@ func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
 		s:        s,
 		msg:      make(map[uint64]chan *Message),
 		ingoing:  make(chan *Message, MessageBuffer),
-		outgoing: make(chan *Message, 8),
 		read:     make(chan *Message, 8),
 		resetCtx: resetCtx,
 		reset:    reset,
@@ -81,24 +82,28 @@ func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
 		close:    close,
 	}
 
-	go p.handlingLoop()
 	go p.handleRead()
 
 	return p
 }
 
-func (p *pipe) Send(msg *Message) error {
+func (p *pipe) Send(ctx context.Context, msg *Message) (err error) {
+	if p.isClosed() {
+		return ErrClosed
+	}
 	if isEmpty(msg) {
 		return ErrEmpty
 	}
 
-	select {
-	case p.outgoing <- msg:
-		msg.ctx = p.resetCtx
-		return nil
-	case <-p.closeCtx.Done():
-		return ErrClosed
-	}
+	ctx = log.Start(ctx, "Send")
+	defer func() {
+		if err != nil {
+			log.FinishWithErr(ctx, err)
+		}
+		log.Finish(ctx)
+	}()
+
+	return p.handleOutgoing(ctx, msg)
 }
 
 func (p *pipe) Next(ctx context.Context) (*Message, error) {
@@ -132,9 +137,11 @@ func (p *pipe) Close() error {
 		return ErrClosed
 	}
 
+	p.l.Lock()
+	defer p.l.Unlock()
+
 	p.close()
-	close(p.outgoing)
-	return nil
+	return nil // p.s.Close()
 }
 
 func (p *pipe) Reset() error {
@@ -142,52 +149,36 @@ func (p *pipe) Reset() error {
 		return ErrReset
 	}
 
+	defer p.clear()
+
+	p.l.Lock()
+	defer p.l.Unlock()
+
 	p.reset()
-	return nil
+	return p.s.Reset()
 }
 
-func (p *pipe) handlingLoop() {
-	defer func() {
-		p.msg = make(map[uint64]chan *Message)
-		p.s.Reset()
-	}()
-
-	for {
-		select {
-		case msg := <-p.read:
-			p.handleIngoing(msg)
-			continue
-		default:
-		}
-
-		select {
-		case msg, ok := <-p.outgoing:
-			if !ok {
-				p.s.Close() // closing here to keep message handling and closure in order
-				p.outgoing = nil
-				continue
-			}
-
-			p.handleOutgoing(msg)
-		case msg := <-p.read:
-			p.handleIngoing(msg)
-		case <-p.resetCtx.Done():
-			return
-		}
-	}
+func (p *pipe) clear() {
+	p.msg = make(map[uint64]chan *Message)
 }
 
-func (p *pipe) handleOutgoing(msg *Message) {
+func (p *pipe) handleOutgoing(ctx context.Context, msg *Message) error {
+	p.l.Lock()
+	defer p.l.Unlock()
+
 	if msg.pb.Tag == request {
 		msg.pb.Id = p.counter
 		p.msg[msg.pb.Id] = msg.resp
 		p.counter++
 	}
 
-	p.handleWrite(msg)
+	return p.handleWrite(ctx, msg)
 }
 
 func (p *pipe) handleIngoing(msg *Message) {
+	p.l.Lock()
+	defer p.l.Unlock()
+
 	switch msg.pb.Tag {
 	case response:
 		resp, ok := p.msg[msg.pb.Id]
@@ -200,8 +191,7 @@ func (p *pipe) handleIngoing(msg *Message) {
 		log.Info("Received response for unknown request, dropping...")
 		return
 	case request:
-		msg.resp = p.outgoing
-		msg.ctx = p.closeCtx
+		msg.p = p
 	}
 
 	select {
@@ -230,20 +220,21 @@ func (p *pipe) handleRead() {
 			return
 		}
 
-		p.read <- msg
+		p.handleIngoing(msg)
 	}
 }
 
-func (p *pipe) handleWrite(msg *Message) {
+func (p *pipe) handleWrite(ctx context.Context, msg *Message) error {
 	var err error
 	for p.tries = 0; p.tries < MaxWriteAttempts; p.tries++ {
 		err = WriteMessage(p.s, msg)
 		if err == nil {
-			return
+			log.LogKV(ctx, "msgID", msg.pb.Id)
+			return nil
 		}
-
-		log.Errorf("error writing to pipe's stream: %s", err)
 	}
+
+	return err
 }
 
 func (p *pipe) isClosed() bool {
