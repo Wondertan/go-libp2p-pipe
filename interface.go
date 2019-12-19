@@ -18,37 +18,31 @@ import (
 	"context"
 	"io"
 
-	"github.com/libp2p/go-libp2p-core/network"
-
 	"github.com/libp2p/go-libp2p-core/protocol"
 )
 
-var Protocol protocol.ID = "/pipe/1.0.0"
-
 var (
-	// MaxWriteAttempts specifies amount of retries to write on failure
-	MaxWriteAttempts = 3
+	// Protocol ID
+	Protocol protocol.ID = "/pipe/1.0.0"
 
-	// MessageBuffer specifies the size of buffer for incoming messages
+	// MessageBufferSize specifies the size of buffer for incoming messages
 	// If buffer is full, new messages will be dropped
-	MessageBuffer = 8
+	MessageBufferSize = 32
 )
 
 type Pipe interface {
 	// Closes pipe for writing
 	io.Closer
 
-	// Send puts message in the pipe which after are transported to other pipe's end
-	Send(context.Context, *Message) error
+	// Send puts message in the pipe which transports it to other end.
+	// Send is non-blocking
+	Send(*Message) error
 
 	// Next iteratively reads new messages from pipe
 	Next(context.Context) (*Message, error)
 
 	// Protocol returns protocol identifier defined in pipe
 	Protocol() protocol.ID
-
-	// Conn returns underlying connection used by pipe
-	Conn() network.Conn
 
 	// Reset closes the pipe for reading and writing on both sides
 	Reset() error

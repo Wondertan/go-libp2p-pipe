@@ -4,14 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strings"
 	"sync"
 
 	logging "github.com/ipfs/go-log"
-	"github.com/libp2p/go-libp2p-core"
-	"github.com/libp2p/go-libp2p-core/host"
 	"github.com/libp2p/go-libp2p-core/network"
-	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/protocol"
 )
 
@@ -24,70 +20,61 @@ var (
 )
 
 type pipe struct {
-	host host.Host
+	proto protocol.ID
 
-	s     network.Stream
-	tries int
+	in  network.Stream
+	out network.Stream
+
+	ingoing  chan *Message
+	outgoing chan *Message
 
 	counter uint64
-	msg     map[uint64]chan *Message
+	reqs    map[uint64]chan *Message
+	l       sync.Mutex
 
-	ingoing chan *Message
-	read    chan *Message
-
-	resetCtx context.Context
-	reset    context.CancelFunc
-	closeCtx context.Context
-	close    context.CancelFunc
-
-	l sync.Mutex
+	reset chan struct{}
+	close chan struct{}
 }
 
-// NewPipe creates new pipe over new stream
-func NewPipe(ctx context.Context, host core.Host, peer peer.ID, proto core.ProtocolID) (Pipe, error) {
-	// stream is created inside to ensure that pipe takes full control over stream
-	s, err := host.NewStream(ctx, peer, wrapProto(proto))
-	if err != nil {
-		return nil, err
-	}
-
-	return newPipe(ctx, s, host), nil
-}
-
-// SetPipeHandler sets new stream handler which wraps stream into the pipe
-func SetPipeHandler(host core.Host, h Handler, proto core.ProtocolID) {
-	host.SetStreamHandler(wrapProto(proto), func(stream network.Stream) {
-		h(newPipe(context.TODO(), stream, host))
-	})
-}
-
-// RemovePipeHandler removes pipe handler from host
-func RemovePipeHandler(host core.Host, proto core.ProtocolID) {
-	host.RemoveStreamHandler(wrapProto(proto))
-}
-
-func newPipe(ctx context.Context, s network.Stream, host host.Host) *pipe {
-	resetCtx, reset := context.WithCancel(ctx)
-	closeCtx, close := context.WithCancel(ctx)
-
+func newPipe(proto protocol.ID, in, out network.Stream) *pipe {
 	p := &pipe{
-		host:     host,
-		s:        s,
-		msg:      make(map[uint64]chan *Message),
-		ingoing:  make(chan *Message, MessageBuffer),
-		read:     make(chan *Message, 8),
-		resetCtx: resetCtx,
-		reset:    reset,
-		closeCtx: closeCtx,
-		close:    close,
+		proto:    proto,
+		in:       in,
+		out:      out,
+		ingoing:  make(chan *Message, MessageBufferSize),
+		outgoing: make(chan *Message, MessageBufferSize),
+		reqs:     make(map[uint64]chan *Message),
+		reset:    make(chan struct{}),
+		close:    make(chan struct{}),
 	}
 
 	go p.handleRead()
-
+	go p.handleWrite()
 	return p
 }
 
-func (p *pipe) Send(ctx context.Context, msg *Message) (err error) {
+func (p *pipe) isReset() bool {
+	select {
+	case <-p.reset:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *pipe) isClosed() bool {
+	select {
+	case <-p.close:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *pipe) Send(msg *Message) error {
+	if p.isReset() {
+		return ErrReset
+	}
 	if p.isClosed() {
 		return ErrClosed
 	}
@@ -95,29 +82,29 @@ func (p *pipe) Send(ctx context.Context, msg *Message) (err error) {
 		return ErrEmpty
 	}
 
-	ctx = log.Start(ctx, "Send")
-	defer func() {
-		if err != nil {
-			log.FinishWithErr(ctx, err)
-		}
-		log.Finish(ctx)
-	}()
-
-	return p.handleOutgoing(ctx, msg)
+	msg.p = p
+	p.outgoing <- msg // TODO change to unbounded channel to make write non-blocking
+	return nil
 }
 
 func (p *pipe) Next(ctx context.Context) (*Message, error) {
-	// to ensure that ingoing is fully read
+	// to ensure that ingoing is fully read, in case context is done or pipe reset.
 	select {
-	case m := <-p.ingoing:
+	case m, ok := <-p.ingoing:
+		if !ok {
+			return nil, io.EOF
+		}
 		return m, nil
 	default:
 	}
 
 	select {
-	case m := <-p.ingoing:
+	case m, ok := <-p.ingoing:
+		if !ok {
+			return nil, io.EOF
+		}
 		return m, nil
-	case <-p.resetCtx.Done():
+	case <-p.reset:
 		return nil, ErrReset
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -125,130 +112,117 @@ func (p *pipe) Next(ctx context.Context) (*Message, error) {
 }
 
 func (p *pipe) Protocol() protocol.ID {
-	return p.s.Protocol()
+	return p.proto
 }
 
 func (p *pipe) Conn() network.Conn {
-	return p.s.Conn()
+	return p.in.Conn()
 }
 
 func (p *pipe) Close() error {
 	if p.isClosed() {
-		return ErrClosed
+		return ErrReset
+	}
+	if p.isReset() {
+		return nil
 	}
 
-	p.l.Lock()
-	defer p.l.Unlock()
-
-	p.close()
-	return nil // p.s.Close()
+	close(p.outgoing)
+	close(p.close)
+	return nil
 }
 
 func (p *pipe) Reset() error {
 	if p.isReset() {
-		return ErrReset
+		return nil
 	}
 
-	defer p.clear()
-
-	p.l.Lock()
-	defer p.l.Unlock()
-
-	p.reset()
-	return p.s.Reset()
-}
-
-func (p *pipe) clear() {
-	p.msg = make(map[uint64]chan *Message)
-}
-
-func (p *pipe) handleOutgoing(ctx context.Context, msg *Message) error {
-	p.l.Lock()
-	defer p.l.Unlock()
-
-	if msg.pb.Tag == request {
-		msg.pb.Id = p.counter
-		p.msg[msg.pb.Id] = msg.resp
-		p.counter++
-	}
-
-	return p.handleWrite(ctx, msg)
+	close(p.reset)
+	return nil
 }
 
 func (p *pipe) handleIngoing(msg *Message) {
-	p.l.Lock()
-	defer p.l.Unlock()
-
+	msg.p = p
 	switch msg.pb.Tag {
 	case response:
-		resp, ok := p.msg[msg.pb.Id]
+		p.l.Lock()
+		defer p.l.Unlock()
+
+		resp, ok := p.reqs[msg.pb.Id]
 		if ok {
-			resp <- msg
-			delete(p.msg, msg.pb.Id)
+			resp <- msg // resp always bufferized, so this won't block
+			delete(p.reqs, msg.pb.Id)
 			return
 		}
 
-		log.Info("Received response for unknown request, dropping...")
+		log.Warn("Received response for unknown request, dropping...")
 		return
-	case request:
-		msg.p = p
 	}
 
 	select {
 	case p.ingoing <- msg:
 	default:
-		log.Info("Can't deliver message, messages are not being handled with `Next`")
+		log.Warn("Can't deliver message, messages are not being handled with `Next`, dropping...")
+	}
+}
+
+func (p *pipe) handleWrite() {
+	defer p.out.Reset()
+
+	var err error
+	for {
+		select {
+		case msg, ok := <-p.outgoing:
+			if !ok {
+				p.out.Close()
+				return
+			}
+
+			if msg.pb.Tag == request {
+				p.l.Lock()
+				msg.pb.Id = p.counter
+				p.reqs[msg.pb.Id] = msg.resp
+				p.counter++
+				p.l.Unlock()
+			}
+
+			err = WriteMessage(p.out, msg)
+			if err != nil {
+				log.Errorf("writing to stream: %s", err)
+				p.Reset()
+				return
+			}
+		case <-p.reset:
+			return
+		}
 	}
 }
 
 func (p *pipe) handleRead() {
+	defer p.in.Reset()
+
 	var err error
 	for {
+		select {
+		case <-p.reset:
+			return
+		default:
+		}
+
 		msg := new(Message)
-		err = ReadMessage(p.s, msg)
+		err = ReadMessage(p.in, msg)
 		if err != nil {
-			if p.isClosed() {
-				// fully close pipe if our end is already closed
-				p.reset()
+			if err == io.EOF {
+				p.in.Close()
+				close(p.ingoing)
+				return
 			}
 
-			// not to log obvious errors
-			if err != io.EOF {
-				log.Errorf("error reading from pipe's stream: %s", err)
-			}
-
+			log.Errorf("reading from stream: %s", err)
+			p.Reset()
 			return
 		}
 
 		p.handleIngoing(msg)
 	}
-}
-
-func (p *pipe) handleWrite(ctx context.Context, msg *Message) error {
-	var err error
-	for p.tries = 0; p.tries < MaxWriteAttempts; p.tries++ {
-		err = WriteMessage(p.s, msg)
-		if err == nil {
-			log.LogKV(ctx, "msgID", msg.pb.Id)
-			return nil
-		}
-	}
-
-	return err
-}
-
-func (p *pipe) isClosed() bool {
-	return p.closeCtx.Err() != nil || p.isReset()
-}
-
-func (p *pipe) isReset() bool {
-	return p.resetCtx.Err() != nil
-}
-
-func wrapProto(proto protocol.ID) protocol.ID {
-	if strings.HasPrefix(string(proto), "/") {
-		return Protocol + proto
-	}
-
-	return Protocol + "/" + proto
 }

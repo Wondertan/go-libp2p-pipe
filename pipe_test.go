@@ -5,13 +5,10 @@ import (
 	"context"
 	"errors"
 	"math/rand"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
-	logging "github.com/ipfs/go-log"
-	lwriter "github.com/ipfs/go-log/writer"
 	"github.com/libp2p/go-libp2p-core/host"
 	"github.com/libp2p/go-libp2p-core/protocol"
 	mocknet "github.com/libp2p/go-libp2p/p2p/net/mock"
@@ -26,19 +23,21 @@ func TestPipeRequestResponse(t *testing.T) {
 	req := newRandRequest()
 	testErr := errors.New("test_error")
 
-	h, err := buildHosts(ctx, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	h := pipeliners(ctx, 2)
 	h1, h2 := h[0], h[1]
 
-	SetPipeHandler(h1, func(p Pipe) {
+	go func() {
+		p, err := h1.NewPipe(ctx, test, h2.host.ID())
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		req, err := p.Next(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		err = req.Reply(ctx, Data(req.Data()))
+		err = req.Reply(Data(req.Data()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -48,18 +47,18 @@ func TestPipeRequestResponse(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = req.Reply(ctx, Error(testErr))
+		err = req.Reply(Error(testErr))
 		if err != nil {
 			t.Fatal(err)
 		}
-	}, test)
+	}()
 
-	p, err := NewPipe(ctx, h2, h1.ID(), test)
+	p, err := h2.NewPipe(ctx, test, h1.host.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = p.Send(ctx, req)
+	err = p.Send(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +72,7 @@ func TestPipeRequestResponse(t *testing.T) {
 		t.Fatal("req is not equal with resp")
 	}
 
-	err = p.Send(ctx, req)
+	err = p.Send(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,22 +88,24 @@ func TestPipeMessage(t *testing.T) {
 	defer cancel()
 
 	test := protocol.ID("test")
-	h, err := buildHosts(ctx, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	h := pipeliners(ctx, 2)
 	h1, h2 := h[0], h[1]
 
 	msgIn := newRandMessage()
 
-	SetPipeHandler(h1, func(p Pipe) {
-		err := p.Send(ctx, msgIn)
+	go func() {
+		p, err := h1.NewPipe(ctx, test, h2.host.ID())
 		if err != nil {
 			t.Fatal(err)
 		}
-	}, test)
 
-	p, err := NewPipe(ctx, h2, h1.ID(), test)
+		err = p.Send(msgIn)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	p, err := h2.NewPipe(ctx, test, h1.host.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,24 +125,26 @@ func TestPipeClosing(t *testing.T) {
 	defer cancel()
 
 	test := protocol.ID("test")
-	h, err := buildHosts(ctx, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	h := pipeliners(ctx, 2)
 	h1, h2 := h[0], h[1]
 
-	SetPipeHandler(h1, func(p Pipe) {
+	go func() {
+		p, err := h1.NewPipe(ctx, test, h2.host.ID())
+		if err != nil {
+			t.Fatal(err)
+		}
+
 		req, err := p.Next(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		err = req.Reply(ctx, Data(req.Data()))
+		err = req.Reply(Data(req.Data()))
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		err = p.Send(ctx, NewMessage(req.Data()))
+		err = p.Send(NewMessage(req.Data()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -150,15 +153,15 @@ func TestPipeClosing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	}, test)
+	}()
 
-	p, err := NewPipe(ctx, h2, h1.ID(), test)
+	p, err := h2.NewPipe(ctx, test, h1.host.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	req := newRandRequest()
-	err = p.Send(ctx, req)
+	err = p.Send(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +181,7 @@ func TestPipeClosing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = p.Send(ctx, req)
+	err = p.Send(req)
 	if err != ErrClosed {
 		t.Fatal("pipe is not properly closed")
 	}
@@ -192,17 +195,18 @@ func BenchmarkPipeMessage(b *testing.B) {
 	msgIn := newRandMessage()
 	pch := make(chan Pipe)
 
-	h, err := buildHosts(ctx, 2)
-	if err != nil {
-		b.Fatal(err)
-	}
+	h := pipeliners(ctx, 2)
 	h1, h2 := h[0], h[1]
 
-	SetPipeHandler(h1, func(p Pipe) {
+	go func() {
+		p, err := h1.NewPipe(ctx, test, h2.host.ID())
+		if err != nil {
+			b.Fatal(err)
+		}
 		pch <- p
-	}, test)
+	}()
 
-	p1, err := NewPipe(ctx, h2, h1.ID(), test)
+	p1, err := h2.NewPipe(ctx, test, h1.host.ID())
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -212,7 +216,7 @@ func BenchmarkPipeMessage(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for n := 0; n < b.N; n++ {
-		err = p1.Send(ctx, msgIn)
+		err = p1.Send(msgIn)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -232,17 +236,18 @@ func BenchmarkPipeRequestResponse(b *testing.B) {
 	msgIn := newRandRequest()
 	pch := make(chan Pipe)
 
-	h, err := buildHosts(ctx, 2)
-	if err != nil {
-		b.Fatal(err)
-	}
+	h := pipeliners(ctx, 2)
 	h1, h2 := h[0], h[1]
 
-	SetPipeHandler(h1, func(p Pipe) {
+	go func() {
+		p, err := h1.NewPipe(ctx, test, h2.host.ID())
+		if err != nil {
+			b.Fatal(err)
+		}
 		pch <- p
-	}, test)
+	}()
 
-	p1, err := NewPipe(ctx, h2, h1.ID(), test)
+	p1, err := h2.NewPipe(ctx, test, h1.host.ID())
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -252,7 +257,7 @@ func BenchmarkPipeRequestResponse(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for n := 0; n < b.N; n++ {
-		err = p1.Send(ctx, msgIn)
+		err = p1.Send(msgIn)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -262,7 +267,7 @@ func BenchmarkPipeRequestResponse(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		err = msgOut.Reply(ctx, Data(msgOut.Data()))
+		err = msgOut.Reply(Data(msgOut.Data()))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -275,27 +280,16 @@ func BenchmarkPipeRequestResponse(b *testing.B) {
 }
 
 func TestPipeMultipleRequestResponses(t *testing.T) {
-	logging.SetLogLevel("pipe", "debug")
-	lwriter.WriterGroup.AddWriter(os.Stderr)
-
 	messagesCount := 50
 	maxReplyDelay := time.Millisecond * 200
 
 	test := protocol.ID("test")
 	ctx := context.Background()
 
-	h, err := buildHosts(ctx, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	h := pipeliners(ctx, 2)
 	h1, h2 := h[0], h[1]
 
-	var count int32
 	ph := func(p Pipe) {
-		ctx := log.Start(ctx, "PipeMultiple")
-		defer log.Finish(ctx)
-		log.SetTag(ctx, "pipe", count)
-
 		go func(p Pipe) {
 			wg := new(sync.WaitGroup)
 			wg.Add(messagesCount)
@@ -310,7 +304,7 @@ func TestPipeMultipleRequestResponses(t *testing.T) {
 
 					delay(ctx, maxReplyDelay)
 
-					err := req.Reply(ctx, Data(req.Data()))
+					err := req.Reply(Data(req.Data()))
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -319,7 +313,7 @@ func TestPipeMultipleRequestResponses(t *testing.T) {
 
 			wg.Wait()
 
-			err = p.Close()
+			err := p.Close()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -330,7 +324,7 @@ func TestPipeMultipleRequestResponses(t *testing.T) {
 		for i := 0; i < messagesCount; i++ {
 			req := newRandRequest()
 
-			err := p.Send(ctx, req)
+			err := p.Send(req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -352,9 +346,16 @@ func TestPipeMultipleRequestResponses(t *testing.T) {
 		wg.Wait()
 	}
 
-	SetPipeHandler(h1, ph, test)
+	go func() {
+		p, err := h1.NewPipe(ctx, test, h2.host.ID())
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	p, err := NewPipe(ctx, h2, h1.ID(), test)
+		ph(p)
+	}()
+
+	p, err := h2.NewPipe(ctx, test, h1.host.ID())
 	if err != nil {
 		t.Fatal(err)
 	}

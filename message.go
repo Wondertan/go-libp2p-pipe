@@ -49,8 +49,8 @@ func newResponse(id uint64) *Message {
 	}
 }
 
-// Message is the central object in Pipe's communication.
-// It is responsible for transferring Pipe's user data.
+// Message is the central object in Pipe'in communication.
+// It is responsible for transferring Pipe'in user data.
 // Also, it has 3 forms: simple message, request, response.
 type Message struct {
 	pb pb.Message
@@ -70,10 +70,11 @@ func (r *Message) Response(ctx context.Context) ([]byte, error) {
 		return nil, errors.New("the message is not a request")
 	}
 
-	// TODO Handle reset ctx
 	select {
 	case m := <-r.resp:
 		return m.response()
+	case <-r.p.reset:
+		return nil, ErrReset
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -111,7 +112,7 @@ func Error(err error) RepOpt {
 
 // Reply sends response, if the message is a received request
 // Reply accepts different options as responses, which could be concatenated together
-func (r *Message) Reply(ctx context.Context, resp ...RepOpt) error {
+func (r *Message) Reply(resp ...RepOpt) error {
 	if len(resp) == 0 {
 		return ErrEmpty
 	}
@@ -124,7 +125,7 @@ func (r *Message) Reply(ctx context.Context, resp ...RepOpt) error {
 		opt(msg)
 	}
 
-	return r.p.Send(ctx, msg)
+	return r.p.Send(msg)
 }
 
 // RepOpt is a type of option functions for Reply method
