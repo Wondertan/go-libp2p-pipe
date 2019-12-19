@@ -53,24 +53,6 @@ func newPipe(proto protocol.ID, in, out network.Stream) *pipe {
 	return p
 }
 
-func (p *pipe) isReset() bool {
-	select {
-	case <-p.reset:
-		return true
-	default:
-		return false
-	}
-}
-
-func (p *pipe) isClosed() bool {
-	select {
-	case <-p.close:
-		return true
-	default:
-		return false
-	}
-}
-
 func (p *pipe) Send(msg *Message) error {
 	if p.isReset() {
 		return ErrReset
@@ -159,11 +141,7 @@ func (p *pipe) handleIngoing(msg *Message) {
 		return
 	}
 
-	select {
-	case p.ingoing <- msg:
-	default:
-		log.Warn("Can't deliver message, messages are not being handled with `Next`, dropping...")
-	}
+	p.ingoing <- msg
 }
 
 func (p *pipe) handleWrite() {
@@ -224,5 +202,23 @@ func (p *pipe) handleRead() {
 		}
 
 		p.handleIngoing(msg)
+	}
+}
+
+func (p *pipe) isReset() bool {
+	select {
+	case <-p.reset:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *pipe) isClosed() bool {
+	select {
+	case <-p.close:
+		return true
+	default:
+		return false
 	}
 }
