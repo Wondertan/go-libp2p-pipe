@@ -38,7 +38,7 @@ func pipeliners(t fataler, ctx context.Context, count int) []*Pipeliner {
 
 	pls := make([]*Pipeliner, count)
 	for i, n := range net.Hosts() {
-		pls[i] = NewPipeLiner(n)
+		pls[i] = NewPipeliner(n)
 	}
 
 	return pls

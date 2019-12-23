@@ -16,7 +16,6 @@ package pipe
 
 import (
 	"context"
-	"io"
 
 	"github.com/libp2p/go-libp2p-core/protocol"
 )
@@ -31,9 +30,6 @@ var (
 )
 
 type Pipe interface {
-	// Closes pipe for writing
-	io.Closer
-
 	// Send puts message in the pipe which transports it to other end.
 	// Send is non-blocking
 	Send(*Message) error
@@ -43,6 +39,9 @@ type Pipe interface {
 
 	// Protocol returns protocol identifier defined in pipe
 	Protocol() protocol.ID
+
+	// Closes pipe for writing
+	Close() error
 
 	// Reset closes the pipe for reading and writing on both sides
 	Reset() error

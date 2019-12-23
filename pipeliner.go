@@ -29,7 +29,7 @@ type Pipeliner struct {
 	}
 }
 
-func NewPipeLiner(host host.Host) *Pipeliner {
+func NewPipeliner(host host.Host) *Pipeliner {
 	pl := &Pipeliner{
 		host: host,
 		awaiting: struct {
