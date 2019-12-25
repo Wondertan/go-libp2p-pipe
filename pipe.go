@@ -206,8 +206,7 @@ func (p *pipe) handleIngoing(msg *Message) {
 
 	select {
 	case p.ingoing <- msg:
-	default:
-		log.Info("Can't deliver message, messages are not being handled with `Next`")
+	case <-p.resetCtx.Done():
 	}
 }
 
@@ -244,6 +243,14 @@ func (p *pipe) handleWrite(msg *Message) {
 
 		log.Errorf("error writing to pipe's stream: %s", err)
 	}
+}
+
+func (p *pipe) endClosed() bool {
+	_, err := p.s.Read(nil)
+	if err == io.EOF {
+		return true
+	}
+	return false
 }
 
 func (p *pipe) isClosed() bool {

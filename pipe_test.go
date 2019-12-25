@@ -273,7 +273,7 @@ func BenchmarkPipeRequestResponse(b *testing.B) {
 }
 
 func TestPipeMultipleRequestResponses(t *testing.T) {
-	messagesCount := 100
+	messagesCount := 3000
 	maxReplyDelay := time.Millisecond * 200
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
