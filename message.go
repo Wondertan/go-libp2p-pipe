@@ -70,23 +70,10 @@ func (r *Message) Response(ctx context.Context) ([]byte, error) {
 		return nil, errors.New("the message is not a request")
 	}
 
+	// TODO Handle reset ctx
 	select {
 	case m := <-r.resp:
 		return m.response()
-	default:
-	}
-
-	select {
-	case m := <-r.resp:
-		return m.response()
-	case <-r.ctx.Done():
-		select {
-		case m := <-r.resp:
-			return m.response()
-		default:
-		}
-
-		return nil, ErrReset
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}

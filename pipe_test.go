@@ -16,9 +16,8 @@ import (
 )
 
 func TestPipeRequestResponse(t *testing.T) {
-	ctx := context.Background()
-	// ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	// defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
 	test := protocol.ID("test")
 	req := newRandRequest()
@@ -273,7 +272,7 @@ func BenchmarkPipeRequestResponse(b *testing.B) {
 }
 
 func TestPipeMultipleRequestResponses(t *testing.T) {
-	messagesCount := 3000
+	messagesCount := 5000
 	maxReplyDelay := time.Millisecond * 200
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -287,15 +286,18 @@ func TestPipeMultipleRequestResponses(t *testing.T) {
 	h1, h2 := h[0], h[1]
 
 	ph := func(p Pipe) {
+		defer p.Close()
+
+		wg := new(sync.WaitGroup)
+
 		go func(p Pipe) {
-			wg := new(sync.WaitGroup)
-			wg.Add(messagesCount)
 			for i := 0; i < messagesCount; i++ {
 				req, err := p.Next(ctx)
 				if err != nil {
 					t.Fatal(err)
 				}
 
+				wg.Add(1)
 				go func(req *Message) {
 					defer wg.Done()
 
@@ -307,17 +309,8 @@ func TestPipeMultipleRequestResponses(t *testing.T) {
 					}
 				}(req)
 			}
-
-			wg.Wait()
-
-			err = p.Close()
-			if err != nil {
-				t.Fatal(err)
-			}
 		}(p)
 
-		wg := new(sync.WaitGroup)
-		wg.Add(messagesCount)
 		for i := 0; i < messagesCount; i++ {
 			req := newRandRequest()
 
@@ -326,6 +319,7 @@ func TestPipeMultipleRequestResponses(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			wg.Add(1)
 			go func(req *Message) {
 				defer wg.Done()
 
@@ -390,13 +384,13 @@ func delay(ctx context.Context, max time.Duration) {
 func buildHosts(ctx context.Context, count int) ([]host.Host, error) {
 	hosts := make([]host.Host, count)
 	for i := 0; i < count; i++ {
-		hosts[i] = bhost.NewBlankHost(swarmt.GenSwarm(nil, context.TODO()))
+		hosts[i] = bhost.NewBlankHost(swarmt.GenSwarm(nil, ctx))
 	}
 
 	for _, h1 := range hosts {
 		for _, h2 := range hosts {
 			if h1.ID() != h2.ID() {
-				err := h1.Connect(context.TODO(), h2.Peerstore().PeerInfo(h2.ID()))
+				err := h1.Connect(ctx, h2.Peerstore().PeerInfo(h2.ID()))
 				if err != nil {
 					return nil, err
 				}
